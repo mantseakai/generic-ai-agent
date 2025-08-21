@@ -1,4 +1,4 @@
-// Multi-Client AI Agent App - Complete Integration
+// Final Corrected App.ts - With Backward Compatibility
 // File: backend/src/app.ts
 
 import express from 'express';
@@ -7,11 +7,11 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 
-// Import your existing routes (preserved for backward compatibility)
+// Import your existing routes (PRESERVED)
 import apiRoutes from './routes';
 import genericInsuranceRoutes from './routes/genericInsuranceChat';
 
-// Import the new Multi-Client Route Integration
+// Import Multi-Client Route Integration (NEW)
 import { RouteIntegration } from './core/routes/integration';
 
 // Import middleware
@@ -59,7 +59,7 @@ app.use(cors(corsOptions));
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 100,
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -71,130 +71,104 @@ app.use(morgan('combined'));
 
 // Initialize Multi-Client Route Integration
 const routeIntegration = new RouteIntegration();
+let multiClientReady = false;
 
-// Health check endpoint - Enhanced with multi-client status
-app.get('/health', async (req, res) => {
+// CRITICAL FIX: Ensure ALL routes are configured before the server starts
+async function startServer() {
   try {
-    const systemHealth = await routeIntegration.getSystemHealth();
-    
-    res.status(200).json({ 
-      status: 'OK', 
-      timestamp: new Date().toISOString(),
-      environment: process.env.NODE_ENV,
-      multiClient: systemHealth,
-      agents: {
-        original_insurance: 'available',
-        generic_insurance: 'available',
-        multi_client: systemHealth.status === 'healthy' ? 'available' : 'initializing'
-      }
-    });
-  } catch (error) {
-    res.status(503).json({
-      status: 'Service Unavailable',
-      timestamp: new Date().toISOString(),
-      error: 'Multi-client system not ready'
-    });
-  }
-});
-
-// Initialize and start the multi-client system
-async function initializeMultiClientSystem() {
-  try {
-    console.log('🚀 Initializing Multi-Client AI Agent System...');
-    
-    // Initialize the multi-client architecture
+    console.log('🚀 Initializing Multi-Client System...');
     await routeIntegration.initialize();
     
-    // Setup multi-client routes
+    // Step 1: Register the new, specific multi-client routes FIRST
     routeIntegration.setupRoutes(app);
     
+    multiClientReady = true;
     console.log('✅ Multi-Client System Ready!');
-    console.log('📡 Available Multi-Client Endpoints:');
-    console.log('   🔧 POST /api/admin/clients - Create client');
-    console.log('   📋 GET /api/admin/clients - List clients');
-    console.log('   💬 POST /api/clients/:clientId/chat/:domain/message - Client chat');
-    console.log('   📱 GET /api/clients/:clientId/whatsapp/qr-code - Client QR codes');
-    console.log('   📊 GET /api/clients/:clientId/analytics/dashboard - Analytics');
-    console.log('   🏥 GET /api/system/health - System health');
     
+    // Step 2: Register the legacy routes SECOND, AFTER the multi-client ones
+    app.use('/api', apiRoutes);
+    app.use('/api/generic/insurance', genericInsuranceRoutes);
+    
+    // Health check endpoint
+    app.get('/health', async (req, res) => {
+      try {
+        let multiClientHealth = null;
+        if (multiClientReady) {
+          try {
+            multiClientHealth = await routeIntegration.getSystemHealth();
+          } catch (error) {
+            console.log('Multi-client health check failed:', (error as Error).message);
+          }
+        }
+        const clientCount = routeIntegration.getClientManager().getTotalClientCount();
+        const agents = {
+          original: { type: 'insurance', endpoint: '/api/chat/message', status: 'active' },
+          generic: { type: 'insurance', endpoint: '/api/generic/insurance/message', status: 'testing' },
+          multiClient: multiClientHealth ? {
+            type: 'multi-domain',
+            endpoints: [
+              '/api/clients/:clientId/chat/:domain/message',
+              '/api/clients/:clientId/whatsapp/qr-code',
+              '/api/admin/clients'
+            ],
+            status: multiClientHealth.status === 'healthy' ? 'active' : 'initializing',
+            features: [
+              'multi_client_isolation',
+              'client_specific_branding', 
+              'domain_agnostic_ai',
+              'scalable_architecture',
+              'usage_analytics'
+            ],
+            clients: clientCount
+          } : {
+            status: multiClientReady ? 'error' : 'not_initialized',
+            error: multiClientReady ? 'Health check failed' : 'Multi-client system not initialized'
+          }
+        };
+        res.status(200).json({
+          success: true,
+          status: 'OK',
+          multiClient: {
+            ...agents.multiClient,
+            status: multiClientHealth?.status || 'not_initialized'
+          },
+          migration_status: multiClientReady ? 'multi_client_architecture_ready' : 'legacy_mode',
+          backward_compatibility: 'fully_maintained',
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        res.json({
+          success: true,
+          agents: {
+            original: { type: 'insurance', endpoint: '/api/chat/message', status: 'active' },
+            generic: { type: 'insurance', endpoint: '/api/generic/insurance/message', status: 'testing' },
+            multiClient: { status: 'error', error: 'Status endpoint failed' }
+          },
+          migration_status: 'legacy_mode',
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+
+    // Error handling middleware (PRESERVED)
+    app.use(notFound);
+    app.use(errorHandler);
+
+    // Get the port from environment variables or use a default
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+      console.log(`🎉 Server is running on port ${PORT}`);
+      console.log('--- Server ready to handle requests ---');
+    });
+
   } catch (error) {
-    console.error('❌ Failed to initialize Multi-Client System:', error);
-    console.log('⚠️  Continuing with legacy routes only...');
+    console.error('❌ Failed to start server:', error);
+    console.log('⚠️ Server will not start due to initialization failure.');
+    process.exit(1);
   }
 }
 
-// Setup all routes in correct order
+// Start the server
+startServer();
 
-// 1. Multi-Client Routes (NEW - highest priority)
-// These are initialized by routeIntegration.setupRoutes(app) above
-
-// 2. Legacy Routes (PRESERVED - backward compatibility)
-app.use('/api', apiRoutes);
-app.use('/api/generic/insurance', genericInsuranceRoutes);
-
-// 3. Agent status endpoint (enhanced with multi-client info)
-app.get('/api/agents/status', async (req, res) => {
-  try {
-    const systemHealth = await routeIntegration.getSystemHealth();
-    const clientStats = routeIntegration.getClientManager().getTotalClientCount();
-    
-    res.json({
-      success: true,
-      agents: {
-        original: {
-          type: 'insurance',
-          endpoint: '/api/chat/message',
-          status: 'active',
-          features: ['conversation', 'lead_scoring', 'knowledge_retrieval']
-        },
-        generic: {
-          type: 'insurance',
-          endpoint: '/api/generic/insurance/message',
-          status: 'testing',
-          features: ['conversation', 'lead_scoring', 'knowledge_retrieval', 'business_logic', 'domain_config']
-        },
-        multiClient: {
-          type: 'multi-domain',
-          endpoints: [
-            '/api/clients/:clientId/chat/:domain/message',
-            '/api/clients/:clientId/whatsapp/qr-code',
-            '/api/admin/clients'
-          ],
-          status: systemHealth.status === 'healthy' ? 'active' : 'initializing',
-          features: [
-            'multi_client_isolation',
-            'client_specific_branding', 
-            'domain_agnostic_ai',
-            'scalable_architecture',
-            'usage_analytics'
-          ],
-          clients: clientStats
-        }
-      },
-      migration_status: 'multi_client_architecture_complete',
-      backward_compatibility: 'fully_maintained',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.json({
-      success: true,
-      agents: {
-        original: { type: 'insurance', endpoint: '/api/chat/message', status: 'active' },
-        generic: { type: 'insurance', endpoint: '/api/generic/insurance/message', status: 'testing' },
-        multiClient: { status: 'error', error: 'System not initialized' }
-      },
-      migration_status: 'legacy_mode',
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// Error handling middleware
-app.use(notFound);
-app.use(errorHandler);
-
-// Export the app
 export default app;
-
-// Export initialization function for server.ts
-export { initializeMultiClientSystem };

@@ -196,6 +196,8 @@ export interface ClientCreateRequest {
   organizationName: string;
   domains: string[];
   contactEmail: string;
+  businessPhoneNumber?: string; // ADDED MISSING FIELD
+  industry?: string; // ADDED MISSING FIELD
   socialMedia?: {
     tiktok?: {
       accessToken: string;
@@ -435,6 +437,7 @@ export interface ClientOnboardingData {
   organizationName: string;
   domains: string[];
   contactEmail: string;
+  businessPhoneNumber?: string;
   
   whatsapp: {
     businessPhoneNumber: string;

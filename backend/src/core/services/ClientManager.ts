@@ -88,6 +88,7 @@ export class ClientManager {
     }
   }
 
+  
   /**
    * Process message for specific client and domain
    */
@@ -111,6 +112,7 @@ export class ClientManager {
     }
 
     // Get domain configuration
+    await DomainConfigFactory.initialize();
     const domainConfig = DomainConfigFactory.create(domain);
     const customizedConfig = this.customizeDomainForClient(domainConfig, clientConfig);
 

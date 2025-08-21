@@ -2,6 +2,8 @@
 // File: backend/src/core/services/MultiClientDatabaseAdapter.ts
 
 import { ClientConfig } from '../types/client-types';
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface DatabaseConnection {
   clientId: string;
@@ -404,21 +406,34 @@ export class MultiClientDatabaseAdapter {
   }
 
   private async createSQLiteConnection(config: any): Promise<{ connection: any; pool: any }> {
-    try {
-      const sqlite3 = require('sqlite3').verbose();
-      const { open } = require('sqlite');
-      
-      const connection = await open({
-        filename: config.connectionString.replace('sqlite://', ''),
-        driver: sqlite3.Database
-      });
+  try {
+    const sqlite3 = require('sqlite3');
+    const sqlite = require('sqlite');
 
-      return { connection, pool: null };
-    } catch (error) {
-      console.error('SQLite connection failed:', error);
-      throw new Error(`SQLite connection failed: ${(error as Error).message}`);
+    // 1. Define the full database file path
+    const dbPath = config.connectionString.replace('sqlite://', '');
+    const dbDir = path.dirname(dbPath);
+
+    // 2. Ensure the database directory exists
+    // The `recursive: true` option ensures parent directories are also created
+    if (!fs.existsSync(dbDir)) {
+      console.log(`Creating database directory: ${dbDir}`);
+      fs.mkdirSync(dbDir, { recursive: true });
     }
+
+    // 3. Open the connection
+    const connection = await sqlite.open({
+      filename: dbPath,
+      driver: sqlite3.Database
+    });
+
+    console.log('✅ SQLite connection established successfully');
+    return { connection, pool: null };
+  } catch (error) {
+    console.error('❌ SQLite connection failed:', error);
+    throw new Error(`SQLite connection failed: ${(error as Error).message}`);
   }
+}
 
   private async testConnection(connection: any, type: string): Promise<void> {
     switch (type) {

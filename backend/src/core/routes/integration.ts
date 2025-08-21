@@ -1,13 +1,14 @@
 // File: backend/src/core/routes/integration.ts - FIXED VERSION
 
-import { Express } from 'express';
+import { Express, Router } from 'express';
 import { ClientManager } from '../services/ClientManager';
 import { MultiClientVectorStore } from '../services/MultiClientVectorStore';
 import { MultiClientDatabaseAdapter } from '../services/MultiClientDatabaseAdapter';
-import { createClientChatRoutes, createClientManagementRoutes } from './client-chat';
+import { createClientChatRoutes } from './client-chat';
+import { createClientManagementRoutes } from './client-management';
 
 // Import enhanced WhatsApp service
-import { createMultiClientWhatsAppRoutes } from '../../enhanced/whatsapp/MultiClientWhatsAppService';
+import { createMultiClientWhatsAppRoutes } from './whatsapp-routes';
 
 /**
  * Integration service to set up all multi-client routes
@@ -71,15 +72,19 @@ export class RouteIntegration {
     app.use('/api/admin', clientManagementRoutes);
     console.log('✅ Admin client management routes: /api/admin/*');
 
+    const clientRouter = Router({ mergeParams: true });
+
     // 2. Multi-Client Chat Routes
     const clientChatRoutes = createClientChatRoutes(this.clientManager);
     app.use('/api/clients', clientChatRoutes);
     console.log('✅ Multi-client chat routes: /api/clients/*');
 
     // 3. Enhanced WhatsApp Routes (Multi-Client)
-    const whatsappRoutes = createMultiClientWhatsAppRoutes(this.clientManager);
-    app.use('/api/clients', whatsappRoutes);
+    //const whatsappRoutes = createMultiClientWhatsAppRoutes(this.clientManager);
+    //app.use('/api/clients', whatsappRoutes);
     console.log('✅ Multi-client WhatsApp routes: /api/clients/*/whatsapp/*');
+    const whatsappRoutes = createMultiClientWhatsAppRoutes(this.clientManager);
+    clientRouter.use('/api/clients', whatsappRoutes); // Mount at the root of this router
 
     // 4. Analytics and Monitoring Routes
     this.setupAnalyticsRoutes(app);

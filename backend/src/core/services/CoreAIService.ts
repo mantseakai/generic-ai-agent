@@ -71,6 +71,7 @@ export class CoreAIService {
     if (!this.openai.apiKey) {
       throw new Error('OpenAI API key is required');
     }
+    
 
     console.log('✅ Core AI Service ready');
   }

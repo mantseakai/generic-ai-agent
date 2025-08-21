@@ -2,7 +2,7 @@
 // File: backend/src/server.ts
 
 import dotenv from 'dotenv';
-import app, { initializeMultiClientSystem } from './app';
+import app from './app';
 
 // Load environment variables
 dotenv.config();
@@ -14,8 +14,7 @@ async function startServer() {
     console.log('Starting Multi-Client AI Agent Server...');
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     
-    // Initialize the multi-client architecture first
-    await initializeMultiClientSystem();
+    // Multi-client system is initialized in app.ts
     
     // Start the server
     const server = app.listen(PORT, () => {
