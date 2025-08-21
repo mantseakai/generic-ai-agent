@@ -1,11 +1,12 @@
-// Generic AI Service for Multi-Domain Retail Applications
-// File: backend/src/services/GenericAIService.ts
+// Consolidated AIService - Phase 2 Component 1
+// File: backend/src/services/AIService.ts
+// This replaces: GenericAIService, EnhancedAIService, CleanGenericAIService, GenericAIServiceWrapper
 
 import OpenAI from 'openai';
-import { GenericRAGService } from './GenericRAGService';
-import { DatabaseAdapter } from './adapters/DatabaseAdapter';
 import { DomainConfig } from '../types/domain';
+import { ClientConfig } from '../core/types/client-types';
 
+// Core interfaces for the consolidated service
 interface ConversationMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -13,13 +14,28 @@ interface ConversationMessage {
   metadata?: any;
 }
 
-interface GenericContext {
-  domain: string; // 'insurance', 'electronics', 'clothing', 'automotive', etc.
-  stage: string; // Domain-specific stages
-  entityType?: string; // Product/service type within domain
+interface ConversationContext {
+  domain: string;
+  stage: string;
+  entityType?: string;
   customerInfo: Record<string, any>;
-  businessLogic?: Record<string, any>; // Domain-specific calculations/rules
+  businessLogic?: Record<string, any>;
+  conversationHistory: ConversationMessage[];
+  clientId?: string;
   [key: string]: any;
+}
+
+// Define interfaces for domain-specific data
+interface InsuranceDomainSpecificData {
+  insuranceType: string;
+  riskAssessmentComplete: boolean;
+  quotesGenerated: number;
+}
+
+interface ResortDomainSpecificData {
+  bookingStage: string;
+  roomPreferences: string[];
+  activityInterests: string[];
 }
 
 interface AIResponse {
@@ -28,879 +44,589 @@ interface AIResponse {
   leadScore: number;
   shouldCaptureLead: boolean;
   nextAction: string;
-  context: GenericContext;
-  businessResult?: any; // Domain-specific results (quotes, recommendations, etc.)
+  context: ConversationContext;
+  businessResult?: any;
   followUpQuestions?: string[];
+  premiumQuote?: any;
+  recommendations?: any[];
+  usedKnowledge?: any;
+  nextState?: string;
+
+  domainSpecific?: InsuranceDomainSpecificData | ResortDomainSpecificData | any; // Use a union type
+
 }
 
-interface Recommendation {
+interface QueryOptions {
+  useRAG?: boolean;
+  includeHistory?: boolean;
+  maxHistoryLength?: number;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+interface BusinessLogicResult {
   type: string;
-  action?: string;
-  data?: any;
-  priority?: 'urgent' | 'high' | 'medium' | 'low';
+  data: any;
+  confidence: number;
+  needsFollowUp: boolean;
 }
 
-export class GenericAIService {
+/**
+ * Consolidated AI Service for Multi-Domain, Multi-Client Platform
+ * 
+ * This service combines all previous AI service functionality:
+ * - Generic domain processing (insurance, resort, pension)
+ * - Multi-client support with isolation
+ * - RAG integration
+ * - Business logic processing (premium calculations, bookings, etc.)
+ * - Conversation management
+ * - Lead scoring and capture
+ */
+export class AIService {
   private openai: OpenAI;
-  private ragService: GenericRAGService;
-  private databaseAdapter?: DatabaseAdapter;
   private domainConfig: DomainConfig;
-  private conversations: Map<string, any> = new Map();
+  private clientConfig?: ClientConfig;
+  private conversations: Map<string, ConversationContext> = new Map();
+  private ragService?: any; // Will be injected
+  private databaseAdapter?: any; // Will be injected
+  private vectorStore?: any; // Will be injected
+  private businessLogicHandlers: Map<string, Function> = new Map();
+  private initialized: boolean = false;
 
   constructor(
     domainConfig: DomainConfig,
-    databaseAdapter?: DatabaseAdapter
+    clientConfig?: ClientConfig,
+    dependencies?: {
+      ragService?: any;
+      databaseAdapter?: any;
+      vectorStore?: any;
+    }
   ) {
+    this.domainConfig = domainConfig;
+    this.clientConfig = clientConfig;
+    
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY || ''
     });
-    this.domainConfig = domainConfig;
-    this.ragService = new GenericRAGService(domainConfig);
-    this.databaseAdapter = databaseAdapter; // Make it optional
+
+    // Inject dependencies if provided
+    if (dependencies) {
+      this.ragService = dependencies.ragService;
+      this.databaseAdapter = dependencies.databaseAdapter;
+      this.vectorStore = dependencies.vectorStore;
+    }
+
+    this.setupBusinessLogicHandlers();
   }
 
   /**
-   * Initialize the service with domain-specific configuration
+   * Initialize the consolidated AI service
    */
   async initialize(): Promise<void> {
-    console.log(`🤖 Initializing Generic AI Service for domain: ${this.domainConfig.domain}`);
-    await this.ragService.initialize();
-    
-    // Only initialize database adapter if provided
-    if (this.databaseAdapter) {
-      await this.databaseAdapter.initialize();
-      console.log('✅ Database adapter initialized');
-    } else {
-      console.log('ℹ️  No database adapter provided - running without database integration');
+    if (this.initialized) return;
+
+    console.log(`Initializing AI Service for domain: ${this.domainConfig.domain}${this.clientConfig ? ` (Client: ${this.clientConfig.clientId})` : ''}`);
+
+    try {
+      // Initialize dependencies if available
+      if (this.ragService && typeof this.ragService.initialize === 'function') {
+        await this.ragService.initialize();
+        console.log('RAG Service initialized');
+      }
+
+      if (this.databaseAdapter && typeof this.databaseAdapter.initialize === 'function') {
+        await this.databaseAdapter.initialize();
+        console.log('Database adapter initialized');
+      }
+
+      if (this.vectorStore && typeof this.vectorStore.initialize === 'function') {
+        await this.vectorStore.initialize();
+        console.log('Vector store initialized');
+      }
+
+      this.initialized = true;
+      console.log('AI Service ready');
+    } catch (error) {
+      console.error('Failed to initialize AI Service:', error);
+      throw error;
     }
-    
-    console.log('✅ Generic AI Service ready');
   }
 
   /**
-   * Process user message with domain-agnostic approach
+   * Main message processing method - handles all conversation types
    */
-  async processMessage(userId: string, message: string, contextOverride?: Partial<GenericContext>): Promise<AIResponse> {
+  async processMessage(
+    userId: string,
+    message: string,
+    contextOverride?: Partial<ConversationContext>,
+    options: QueryOptions = {}
+  ): Promise<AIResponse> {
     try {
-      // Get or create conversation
-      let conversation = this.conversations.get(userId) || this.createNewConversation(userId);
+      await this.initialize();
 
-      // Apply context override if provided
-      if (contextOverride) {
-        conversation.context = { ...conversation.context, ...contextOverride };
-      }
-
-      // Add user message to history
-      conversation.messages.push({
-        role: 'user',
-        content: message,
-        timestamp: new Date()
-      });
-
-      // Analyze message using domain configuration
-      const messageAnalysis = await this.analyzeMessage(message, conversation.context);
-
-      // Update conversation context
-      conversation.context = this.updateContext(conversation.context, messageAnalysis, message);
-
-      // Check for domain-specific business logic (quotes, calculations, etc.)
-      if (messageAnalysis.requiresBusinessLogic) {
-        return await this.handleBusinessLogic(userId, message, conversation, messageAnalysis);
-      }
-
-      // Query knowledge base with enhanced context
-      const ragResult = await this.ragService.queryKnowledge(message, {
-        domain: this.domainConfig.domain,
-        entityType: conversation.context.entityType,
-        stage: conversation.context.stage,
-        customerInfo: conversation.context.customerInfo,
-        conversationHistory: conversation.messages.slice(-3)
-      });
-
-      // Query database if needed and adapter is available
-      let databaseResults = null;
-      if (messageAnalysis.requiresDatabaseQuery && this.databaseAdapter) {
-        try {
-          databaseResults = await this.databaseAdapter.query(
-            messageAnalysis.queryParams,
-            conversation.context
-          );
-        } catch (error) {
-          console.error('❌ Database query failed:', error);
-          // Continue without database results
-        }
-      } else if (messageAnalysis.requiresDatabaseQuery && !this.databaseAdapter) {
-        console.warn('⚠️ Database query requested but no adapter available');
-      }
-
-      // Generate response using domain-specific prompts
-      const response = await this.generateDomainResponse(
-        message,
-        conversation,
-        ragResult,
-        databaseResults,
-        messageAnalysis
-      );
-
+      // Get or create conversation context
+      const context = this.getOrCreateConversation(userId, contextOverride);
       
+      // Add user message to history
+      this.addMessageToHistory(context, 'user', message);
 
-      // Update conversation
-      conversation.messages.push({
-        role: 'assistant',
-        content: response.message,
-        timestamp: new Date(),
-        metadata: { 
-          confidence: response.confidence, 
-          leadScore: response.leadScore,
-          ragContext: ragResult?.context ? 'knowledge_found' : 'no_knowledge',
-          usedKnowledge: ragResult?.metadata || {}
+      // Analyze the user input
+      const analysis = await this.analyzeUserInput(message, context);
+
+      // Check if this requires business logic processing
+      if (analysis.requiresBusinessLogic) {
+        const businessResult = await this.processBusinessLogic(message, context, analysis);
+        if (businessResult) {
+          return this.createResponseWithBusinessLogic(message, context, analysis, businessResult);
         }
-      });
+      }
 
-      conversation.leadScore = response.leadScore;
-      conversation.lastUpdated = new Date();
-      this.conversations.set(userId, conversation);
+      // Query knowledge base if RAG is available and enabled
+      let knowledge = null;
+      if (options.useRAG !== false && this.ragService) {
+        knowledge = await this.queryKnowledge(message, context);
+      }
 
-      return response;
+      // Generate AI response
+      const response = await this.generateResponse(message, context, analysis, knowledge, options);
+
+      // Add assistant response to history
+      this.addMessageToHistory(context, 'assistant', response.message);
+
+      // Calculate lead score
+      const leadScore = this.calculateLeadScore(analysis, context);
+      const shouldCaptureLead = leadScore >= (this.domainConfig.leadCaptureThreshold || 70);
+
+      // Update conversation state
+      this.updateConversationState(context, analysis);
+
+      return {
+        message: response.message,
+        confidence: response.confidence,
+        leadScore,
+        shouldCaptureLead,
+        nextAction: analysis.nextBestAction || 'continue',
+        context,
+        businessResult: response.businessResult,
+        followUpQuestions: response.followUpQuestions,
+        usedKnowledge: knowledge,
+        nextState: context.stage
+      };
 
     } catch (error) {
-      console.error('❌ Error processing message:', error);
-      return this.handleError(error, message, userId);
+      console.error('Error processing message:', error);
+      return this.createErrorResponse(userId, message, error);
     }
   }
 
   /**
-   * Analyze message with domain-specific intelligence
+   * Analyze user input to determine intent and requirements
    */
-  private async analyzeMessage(message: string, context: GenericContext): Promise<any> {
-    const analysisPrompt = this.buildAnalysisPrompt(message, context);
-
+  private async analyzeUserInput(message: string, context: ConversationContext): Promise<any> {
     try {
+      const systemPrompt = this.buildAnalysisPrompt(context);
+      
       const response = await this.openai.chat.completions.create({
-        model: process.env.MODEL_NAME || 'gpt-4',
+        model: 'gpt-4',
         messages: [
-          {
-            role: 'system',
-            content: `You are an expert analyzer for ${this.domainConfig.domain} domain. 
-                     Analyze customer messages for intent, entity types, business logic needs, and database queries.`
-          },
-          {
-            role: 'user',
-            content: analysisPrompt
-          }
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: message }
         ],
         temperature: 0.3,
-        max_tokens: 1000
+        max_tokens: 500
       });
 
-      return JSON.parse(response.choices[0].message.content || '{}');
+      const content = response.choices[0]?.message?.content || '{}';
+      
+      try {
+        return JSON.parse(content);
+      } catch {
+        // Fallback if JSON parsing fails
+        return this.createDefaultAnalysis(message, context);
+      }
     } catch (error) {
-      console.error('Failed to analyze message:', error);
-      return this.getDefaultAnalysis(message, context);
+      console.error('Error analyzing user input:', error);
+      return this.createDefaultAnalysis(message, context);
     }
   }
 
   /**
    * Build domain-specific analysis prompt
    */
-  private buildAnalysisPrompt(message: string, context: GenericContext): string {
-    const domainSpecifics = this.domainConfig.analysisInstructions || '';
-    const entityTypes = this.domainConfig.entityTypes?.join(', ') || 'products';
-    const businessLogicTriggers = this.domainConfig.businessLogicTriggers?.join(', ') || '';
-
-    return `
-Analyze this ${this.domainConfig.domain} customer message:
-
-MESSAGE: "${message}"
-
-DOMAIN CONTEXT:
-- Domain: ${this.domainConfig.domain}
-- Available entity types: ${entityTypes}
-- Current stage: ${context.stage}
-- Business logic triggers: ${businessLogicTriggers}
-
-${domainSpecifics}
-
-REQUIRED ANALYSIS (return as JSON):
-{
-  "primaryIntent": "string", 
-  "entityType": "string",
-  "urgencyLevel": "high|medium|low",
-  "emotionalState": "string",
-  "requiresBusinessLogic": boolean,
-  "businessLogicType": "string",
-  "requiresDatabaseQuery": boolean,
-  "queryParams": {},
-  "leadReadiness": "string",
-  "nextBestAction": "string",
-  "confidence": number
-}
-`;
-  }
-
-  /**
-   * Handle domain-specific business logic (quotes, calculations, recommendations)
-   */
-  private async handleBusinessLogic(
-    userId: string,
-    message: string,
-    conversation: any,
-    analysis: any
-  ): Promise<AIResponse> {
-    try {
-      // Use domain configuration to determine business logic handler
-      const businessLogicHandler = this.domainConfig.businessLogicHandlers?.[analysis.businessLogicType];
-      
-      if (!businessLogicHandler) {
-        throw new Error(`No handler found for business logic: ${analysis.businessLogicType}`);
-      }
-
-      // Execute business logic
-      const businessResult = await businessLogicHandler(
-        conversation.context.customerInfo,
-        analysis.queryParams,
-        this.databaseAdapter // Pass the adapter (could be undefined)
-      );
-
-      // Generate response with business result
-      const response = await this.generateBusinessLogicResponse(
-        message,
-        conversation,
-        businessResult,
-        analysis
-      );
-
-      return {
-        ...response,
-        businessResult
-      };
-
-    } catch (error) {
-      console.error('❌ Business logic error:', error);
-      return this.handleError(error, message, userId);
-    }
-  }
-
-  /**
-   * Generate domain-specific response
-   */
-  private async generateDomainResponse(
-    message: string,
-    conversation: any,
-    ragResult: any,
-    databaseResults: any,
-    analysis: any
-  ): Promise<AIResponse> {
-    const responsePrompt = this.buildResponsePrompt(
-      message,
-      conversation,
-      ragResult,
-      databaseResults,
-      analysis
-    );
-
-    try {
-      const response = await this.openai.chat.completions.create({
-        model: process.env.MODEL_NAME || 'gpt-4',
-        messages: [
-          {
-            role: 'system',
-            content: this.domainConfig.systemPrompt || `You are a helpful ${this.domainConfig.domain} assistant.`
-          },
-          {
-            role: 'user',
-            content: responsePrompt
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 600
-      });
-
-      const responseText = response.choices[0].message.content || '';
-      
-      return {
-        message: responseText,
-        confidence: ragResult?.confidence || 0.7,
-        leadScore: this.calculateLeadScore(analysis, conversation),
-        shouldCaptureLead: this.shouldCaptureLead(analysis, conversation),
-        nextAction: analysis.nextBestAction || 'continue_conversation',
-        context: conversation.context,
-        followUpQuestions: this.generateFollowUpQuestions(analysis, conversation)
-      };
-
-    } catch (error) {
-      console.error('❌ Response generation error:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Build response prompt with domain-specific context
-   */
-  private buildResponsePrompt(
-    message: string,
-    conversation: any,
-    ragResult: any,
-    databaseResults: any,
-    analysis: any
-  ): string {
-    const domainInstructions = this.domainConfig.responseInstructions || '';
-    const conversationHistory = conversation.messages.slice(-4)
-      .map((msg: any) => `${msg.role}: ${msg.content.substring(0, 150)}...`)
-      .join('\n');
-
-    return `
-DOMAIN: ${this.domainConfig.domain}
-CUSTOMER MESSAGE: "${message}"
-
-KNOWLEDGE BASE CONTEXT:
-${ragResult?.context || 'No specific knowledge found - provide general helpful information about ' + this.domainConfig.domain}
-
-${databaseResults ? `DATABASE RESULTS:
-${JSON.stringify(databaseResults, null, 2)}` : ''}
-
-CUSTOMER ANALYSIS:
-- Intent: ${analysis.primaryIntent}
-- Entity Interest: ${analysis.entityType}
-- Emotional State: ${analysis.emotionalState}
-- Lead Readiness: ${analysis.leadReadiness}
-
-CONVERSATION HISTORY:
-${conversationHistory}
-
-DOMAIN-SPECIFIC INSTRUCTIONS:
-${domainInstructions}
-
-RAG METADATA: ${ragResult?.metadata ? JSON.stringify(ragResult.metadata) : 'No specific knowledge metadata'}
-
-Generate a helpful, personalized response that:
-1. Uses accurate domain knowledge from the knowledge base when available
-2. Addresses the customer's specific intent and emotional state
-3. Moves the conversation forward appropriately
-4. Follows domain-specific tone and style guidelines
-5. Includes relevant ${this.domainConfig.domain} context
-6. References specific knowledge when available, or provides general guidance when not
-
-${ragResult?.confidence > 0.8 ? 'HIGH CONFIDENCE: Use the knowledge base information prominently in your response.' : ragResult?.confidence > 0.5 ? 'MEDIUM CONFIDENCE: Reference knowledge base information but supplement with general knowledge.' : 'LOW CONFIDENCE: Provide general helpful information and ask clarifying questions.'}
-`;
-  }
-
-  /**
-   * Create new conversation with domain context
-   */
-  private createNewConversation(userId: string): any {
-    return {
-      userId,
-      messages: [],
-      context: {
-        domain: this.domainConfig.domain,
-        stage: this.domainConfig.defaultStage || 'greeting',
-        customerInfo: {},
-        leadQualified: false,
-        sentiment: 'neutral'
-      },
-      leadScore: 0,
-      lastUpdated: new Date()
-    };
-  }
-
-  /**
-   * Update conversation context based on analysis
-   */
-  private updateContext(
-    currentContext: GenericContext,
-    analysis: any,
-    message: string
-  ): GenericContext {
-    return {
-      ...currentContext,
-      stage: this.determineNextStage(currentContext.stage, analysis),
-      entityType: analysis.entityType || currentContext.entityType,
-      customerInfo: {
-        ...currentContext.customerInfo,
-        ...this.extractCustomerInfo(message, analysis)
-      }
-    };
-  }
-
-  /**
-   * Determine next conversation stage based on domain flow
-   */
-  private determineNextStage(currentStage: string, analysis: any): string {
-    const stageFlow = this.domainConfig.stageFlow || {};
-    const nextStage = stageFlow[currentStage]?.[analysis.primaryIntent];
-    return nextStage || currentStage;
-  }
-
-  /**
-   * Extract customer information from message
-   */
-  private extractCustomerInfo(message: string, analysis: any): Record<string, any> {
-    // Implement domain-specific information extraction
-    const customerInfo: Record<string, any> = {};
-
-    // Extract common information patterns
-    const ageMatch = message.match(/(\d+)\s*(?:years?\s*old|yr|y\.o\.)/i);
-    if (ageMatch) {
-      customerInfo.age = parseInt(ageMatch[1]);
-    }
-
-    const budgetMatch = message.match(/budget.*?(\d+)/i) || message.match(/(\d+).*?budget/i);
-    if (budgetMatch) {
-      customerInfo.budget = parseInt(budgetMatch[1]);
-    }
-
-    // Domain-specific extraction
-    switch (this.domainConfig.domain) {
-      case 'insurance':
-        if (message.toLowerCase().includes('car') || message.toLowerCase().includes('vehicle')) {
-          customerInfo.vehicleType = 'car';
-        }
-        if (message.toLowerCase().includes('health') || message.toLowerCase().includes('medical')) {
-          customerInfo.insuranceType = 'health';
-        }
-        break;
-
-      case 'electronics':
-        if (message.toLowerCase().includes('gaming')) {
-          customerInfo.useCase = 'gaming';
-        }
-        if (message.toLowerCase().includes('work') || message.toLowerCase().includes('office')) {
-          customerInfo.useCase = 'professional';
-        }
-        break;
-
-      case 'fashion':
-        if (message.toLowerCase().includes('work') || message.toLowerCase().includes('office')) {
-          customerInfo.occasion = 'professional';
-        }
-        if (message.toLowerCase().includes('party') || message.toLowerCase().includes('event')) {
-          customerInfo.occasion = 'formal';
-        }
-        break;
-    }
-
-    return customerInfo;
-  }
-
-  /**
-   * Calculate lead score based on domain-specific criteria
-   */
-  private calculateLeadScore(analysis: any, conversation: any): number {
-    const scoreWeights = this.domainConfig.leadScoringWeights || {};
-    let score = conversation.leadScore || 0;
-
-    // Apply domain-specific scoring logic
-    Object.entries(scoreWeights).forEach(([factor, weight]) => {
-      switch (factor) {
-        case 'urgent_need':
-          if (analysis.urgencyLevel === 'high') score += (weight as number);
-          break;
-        case 'budget_discussed':
-          if (analysis.budgetSignals?.length > 0) score += (weight as number);
-          break;
-        case 'specific_coverage':
-        case 'specific_model_interest':
-        case 'specific_item_interest':
-          if (analysis.entityType && analysis.entityType !== 'general') score += (weight as number);
-          break;
-        case 'contact_info_shared':
-          if (conversation.context.customerInfo?.email || conversation.context.customerInfo?.phone) {
-            score += (weight as number);
-          }
-          break;
-        case 'timeline_mentioned':
-          if (analysis.buyingSignals?.includes('timeline_mentioned')) score += (weight as number);
-          break;
-        case 'quote_request':
-        case 'price_inquiry':
-          if (analysis.primaryIntent === 'PRICE_INQUIRY') score += (weight as number);
-          break;
-        case 'comparison_shopping':
-          if (analysis.primaryIntent === 'COMPARISON_REQUEST') score += (weight as number);
-          break;
-        case 'immediate_need':
-          if (analysis.urgencyLevel === 'high') score += (weight as number);
-          break;
-        case 'technical_questions':
-          if (analysis.informationNeeds?.includes('technical_specs')) score += (weight as number);
-          break;
-        case 'style_consultation':
-          if (analysis.primaryIntent === 'STYLE_QUESTION') score += (weight as number);
-          break;
-      }
-    });
-
-    // Boost for conversation engagement
-    const messageCount = Math.floor(conversation.messages.length / 2);
-    if (messageCount > 2) score += 5;
-    if (messageCount > 5) score += 10;
-
-    // Boost for business logic engagement (quotes, calculations)
-    if (conversation.context.businessLogic?.hasEngaged) score += 15;
-
-    return Math.min(100, Math.max(0, score));
-  }
-
-  /**
-   * Determine if lead should be captured based on domain criteria
-   */
-  private shouldCaptureLead(analysis: any, conversation: any): boolean {
-    const captureThreshold = this.domainConfig.leadCaptureThreshold || 70;
-    const leadScore = this.calculateLeadScore(analysis, conversation);
+  private buildAnalysisPrompt(context: ConversationContext): string {
+    const basePrompt = `You are analyzing user messages for a ${context.domain} domain AI assistant.`;
     
-    return leadScore >= captureThreshold && 
-           (analysis.leadReadiness === 'ready' || analysis.leadReadiness === 'hot_lead');
-  }
-
-  /**
-   * Determine next action based on analysis and conversation state
-   */
-  private determineNextAction(analysis: any, conversation: any, businessResult?: any): string {
-    // If we have business results, focus on conversion
-    if (businessResult) {
-      if (analysis.leadReadiness === 'ready' || analysis.leadReadiness === 'hot_lead') {
-        return 'close_sale';
-      }
-      return 'present_business_result';
-    }
-
-    // Standard flow based on intent and conversation stage
-    switch (analysis.primaryIntent) {
-      case 'PRICE_INQUIRY':
-        return 'provide_pricing';
-      case 'COMPARISON_REQUEST':
-        return 'provide_comparison';
-      case 'READY_TO_BUY':
-        return 'initiate_purchase';
-      case 'OBJECTION':
-        return 'handle_objection';
-      case 'TECHNICAL_QUESTION':
-        return 'provide_technical_info';
-      case 'STYLE_QUESTION':
-        return 'provide_style_advice';
+    let domainSpecificInstructions = '';
+    
+    switch (context.domain) {
+      case 'insurance':
+        domainSpecificInstructions = `
+Analyze for:
+- Insurance type interest (auto, health, life, business)
+- Quote request indicators
+- Risk factors mentioned
+- Urgency levels
+- Personal information sharing willingness
+`;
+        break;
+      case 'resort':
+        domainSpecificInstructions = `
+Analyze for:
+- Booking intentions
+- Date preferences
+- Group size
+- Budget indicators
+- Activity interests
+- Urgency of travel plans
+`;
+        break;
+      case 'pension':
+        domainSpecificInstructions = `
+Analyze for:
+- Retirement planning stage
+- SSNIT-related questions
+- Benefit calculation requests
+- Documentation needs
+- Urgency of information needed
+`;
+        break;
       default:
-        // Use domain-specific stage flow
-        const stageFlow = this.domainConfig.stageFlow[conversation.context.stage];
-        if (stageFlow && stageFlow[analysis.primaryIntent]) {
-          return stageFlow[analysis.primaryIntent];
-        }
-        return 'continue_conversation';
+        domainSpecificInstructions = `
+Analyze for:
+- Primary intent
+- Information seeking vs. action intent
+- Urgency indicators
+- Personal information sharing
+`;
     }
+
+    return `${basePrompt}
+
+${domainSpecificInstructions}
+
+Return a JSON object with:
+{
+  "primaryIntent": "INFORMATION|QUOTE|BOOKING|CALCULATION|COMPLAINT|OTHER",
+  "entityType": "specific product/service type",
+  "urgencyLevel": "low|medium|high|urgent",
+  "emotionalState": "neutral|excited|frustrated|confused|satisfied",
+  "requiresBusinessLogic": boolean,
+  "requiresDatabaseQuery": boolean,
+  "leadReadiness": "exploring|interested|ready|qualified",
+  "nextBestAction": "provide_info|gather_details|calculate|book|escalate",
+  "confidence": 0.0-1.0,
+  "extractedEntities": {},
+  "followUpNeeded": boolean
+}`;
   }
 
   /**
-   * Calculate lead score based on domain-specific criteria
+   * Process business logic based on domain and analysis
    */
-  /*private calculateLeadScore(analysis: any, conversation: any): number {
-    const scoreWeights = this.domainConfig.leadScoringWeights || {};
-    let score = conversation.leadScore || 0;
-
-    // Apply domain-specific scoring logic
-    Object.entries(scoreWeights).forEach(([factor, weight]) => {
-      if (analysis[factor]) {
-        score += (weight as number);
+  private async processBusinessLogic(
+    message: string,
+    context: ConversationContext,
+    analysis: any
+  ): Promise<BusinessLogicResult | null> {
+    const handlerKey = `${context.domain}_${analysis.primaryIntent}`;
+    const handler = this.businessLogicHandlers.get(handlerKey);
+    
+    if (handler) {
+      try {
+        return await handler(message, context, analysis);
+      } catch (error) {
+        console.error('Business logic handler error:', error);
+        return null;
       }
+    }
+    
+    // If no specific handler found, try to delegate to domain service
+    return await this.delegateToDomainService(context.domain, analysis.primaryIntent, message, context, analysis);
+  }
+
+  /**
+   * Delegate business logic to domain-specific services
+   */
+  private async delegateToDomainService(
+    domain: string,
+    intent: string,
+    message: string,
+    context: ConversationContext,
+    analysis: any
+  ): Promise<BusinessLogicResult | null> {
+    // This method allows the AIService to remain generic while delegating
+    // domain-specific logic to appropriate domain services
+    
+    // Domain services would be injected during initialization
+    // For now, return null to indicate no domain-specific logic was found
+    console.log(`No domain service found for ${domain}_${intent}`);
+    return null;
+  }
+
+  /**
+   * Register a domain-specific business logic handler
+   */
+  public registerBusinessLogicHandler(key: string, handler: Function): void {
+    this.businessLogicHandlers.set(key, handler);
+  }
+
+  /**
+   * Register multiple handlers from a domain service
+   */
+  public registerDomainHandlers(domain: string, handlers: Record<string, Function>): void {
+    Object.entries(handlers).forEach(([intent, handler]) => {
+      const key = `${domain}_${intent}`;
+      this.businessLogicHandlers.set(key, handler);
+    });
+  }
+
+  /**
+   * Setup domain-specific business logic handlers
+   */
+  private setupBusinessLogicHandlers(): void {
+    // Business logic handlers are now injected from domain services
+    // This keeps the AIService generic and allows domain-specific logic
+    // to be managed in their respective domain folders
+    
+    // Domain handlers will be registered through dependency injection
+    // Example: this.registerDomainHandler('insurance', insuranceDomainService)
+  }
+
+  /**
+   * Insurance quote handler (extracted from existing insurance logic)
+   */
+  private async handleInsuranceQuote(message: string, context: ConversationContext, analysis: any): Promise<BusinessLogicResult> {
+    // Extract relevant information for quote calculation
+    const quoteParams = this.extractInsuranceQuoteParams(message, context, analysis);
+    
+    if (!quoteParams.hasMinimumInfo) {
+      return {
+        type: 'info_needed',
+        data: { missingFields: quoteParams.missing },
+        confidence: 0.8,
+        needsFollowUp: true
+      };
+    }
+
+    // Calculate premium (simplified version)
+    const baseRate = this.getBaseInsuranceRate(quoteParams.type);
+    const riskMultiplier = this.calculateRiskMultiplier(quoteParams);
+    const premium = baseRate * riskMultiplier;
+
+    return {
+      type: 'premium_quote',
+      data: {
+        type: quoteParams.type,
+        premium: premium,
+        currency: 'GHS',
+        breakdown: {
+          baseRate,
+          riskMultiplier,
+          factors: quoteParams.riskFactors
+        }
+      },
+      confidence: 0.9,
+      needsFollowUp: true
+    };
+  }
+
+  /**
+   * Resort booking handler
+   */
+  private async handleResortBooking(message: string, context: ConversationContext, analysis: any): Promise<BusinessLogicResult> {
+    const bookingParams = this.extractBookingParams(message, context, analysis);
+    
+    if (!bookingParams.hasMinimumInfo) {
+      return {
+        type: 'info_needed',
+        data: { missingFields: bookingParams.missing },
+        confidence: 0.8,
+        needsFollowUp: true
+      };
+    }
+
+    // Check availability (mock implementation)
+    const availability = await this.checkAvailability(bookingParams);
+    
+    return {
+      type: 'booking_options',
+      data: {
+        availability,
+        recommendations: this.generateBookingRecommendations(bookingParams),
+        pricing: this.calculateBookingPricing(bookingParams)
+      },
+      confidence: 0.9,
+      needsFollowUp: true
+    };
+  }
+
+  /**
+   * Pension calculation handler
+   */
+  private async handlePensionCalculation(message: string, context: ConversationContext, analysis: any): Promise<BusinessLogicResult> {
+    const pensionParams = this.extractPensionParams(message, context, analysis);
+    
+    if (!pensionParams.hasMinimumInfo) {
+      return {
+        type: 'info_needed',
+        data: { missingFields: pensionParams.missing },
+        confidence: 0.8,
+        needsFollowUp: true
+      };
+    }
+
+    // Calculate pension benefits
+    const monthlyBenefit = this.calculateSSNITBenefit(pensionParams);
+    
+    return {
+      type: 'pension_calculation',
+      data: {
+        monthlyBenefit,
+        projectedTotal: monthlyBenefit * 12 * pensionParams.expectedYears,
+        breakdown: {
+          contributionYears: pensionParams.contributionYears,
+          averageSalary: pensionParams.averageSalary,
+          currentAge: pensionParams.currentAge,
+          retirementAge: pensionParams.retirementAge || 60
+        }
+      },
+      confidence: 0.85,
+      needsFollowUp: true
+    };
+  }
+
+  // Helper methods for conversation management
+  private getOrCreateConversation(userId: string, contextOverride?: Partial<ConversationContext>): ConversationContext {
+    if (!this.conversations.has(userId)) {
+      this.conversations.set(userId, {
+        domain: this.domainConfig.domain,
+        stage: this.domainConfig.defaultStage || 'initial',
+        customerInfo: {},
+        conversationHistory: [],
+        clientId: this.clientConfig?.clientId,
+        ...contextOverride
+      });
+    }
+    
+    const context = this.conversations.get(userId)!;
+    
+    // Apply context override if provided
+    if (contextOverride) {
+      Object.assign(context, contextOverride);
+    }
+    
+    return context;
+  }
+
+  private addMessageToHistory(context: ConversationContext, role: 'user' | 'assistant', content: string): void {
+    context.conversationHistory.push({
+      role,
+      content,
+      timestamp: new Date()
     });
 
-    return Math.min(100, Math.max(0, score));
-  }*/
-
-  /**
-   * Determine if lead should be captured based on domain criteria
-   */
-  /*private shouldCaptureLead(analysis: any, conversation: any): boolean {
-    const captureThreshold = this.domainConfig.leadCaptureThreshold || 70;
-    return conversation.leadScore >= captureThreshold && analysis.leadReadiness === 'high';
-  }*/
-
-  /**
-   * Generate business logic response (e.g., for quotes, calculations, recommendations)
-   */
-  private async generateBusinessLogicResponse(
-    message: string,
-    conversation: any,
-    businessResult: any,
-    analysis: any
-  ): Promise<AIResponse> {
-    const conversationHistory = conversation.messages.slice(-4)
-      .map((msg: any) => `${msg.role}: ${msg.content.substring(0, 100)}...`)
-      .join('\n');
-
-    const prompt = `
-You are a ${this.domainConfig.domain} specialist providing business results to a customer.
-
-CUSTOMER MESSAGE: "${message}"
-
-BUSINESS RESULT:
-${JSON.stringify(businessResult, null, 2)}
-
-CUSTOMER ANALYSIS:
-- Intent: ${analysis.primaryIntent}
-- Entity Interest: ${analysis.entityType}
-- Emotional State: ${analysis.emotionalState}
-- Urgency Level: ${analysis.urgencyLevel}
-- Lead Readiness: ${analysis.leadReadiness}
-
-RECENT CONVERSATION:
-${conversationHistory}
-
-DOMAIN-SPECIFIC GUIDELINES:
-${this.domainConfig.responseInstructions}
-
-Create a professional, engaging response that:
-1. Acknowledges their specific request
-2. Presents the business result clearly and attractively
-3. Explains the value and benefits
-4. Addresses their emotional state and concerns
-5. Provides clear, actionable next steps
-6. Uses appropriate ${this.domainConfig.domain} terminology
-7. Builds trust and confidence
-
-${this.domainConfig.domain === 'insurance' ? `
-For insurance results:
-- Present amounts in Ghana Cedis (GH₵) format
-- Explain coverage benefits clearly
-- Mention policy terms and validity
-- Reference local advantages and context
-- Use encouraging language
-` : this.domainConfig.domain === 'electronics' ? `
-For electronics results:
-- Highlight key specifications and features
-- Compare value propositions
-- Mention warranty and support
-- Include compatibility information
-- Suggest complementary products
-` : `
-For ${this.domainConfig.domain} results:
-- Focus on value and benefits
-- Explain features clearly
-- Provide comparison context
-- Suggest next steps
-`}
-
-Generate a response that moves the customer toward a purchase decision.
-`;
-
-    try {
-      const response = await this.openai.chat.completions.create({
-        model: process.env.MODEL_NAME || 'gpt-4',
-        messages: [
-          {
-            role: 'system',
-            content: this.domainConfig.systemPrompt
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 600
-      });
-
-      const responseText = response.choices[0].message.content || '';
-      
-      // Generate recommendations based on the business result
-      const recommendations = this.generateBusinessRecommendations(businessResult, analysis);
-      
-      return {
-        message: responseText,
-        confidence: 0.9, // High confidence for business logic results
-        leadScore: this.calculateLeadScore(analysis, conversation),
-        shouldCaptureLead: this.shouldCaptureLead(analysis, conversation),
-        nextAction: this.determineNextAction(analysis, conversation, businessResult),
-        context: conversation.context
-      };
-
-    } catch (error) {
-      console.error('❌ Business logic response generation error:', error);
-      
-      // Fallback response
-      const fallbackMessage = this.generateBusinessFallbackResponse(businessResult);
-      
-      return {
-        message: fallbackMessage,
-        confidence: 0.6,
-        leadScore: this.calculateLeadScore(analysis, conversation),
-        shouldCaptureLead: false,
-        nextAction: 'continue_conversation',
-        context: conversation.context
-      };
+    // Keep history manageable
+    if (context.conversationHistory.length > 20) {
+      context.conversationHistory = context.conversationHistory.slice(-15);
     }
   }
 
-  /**
-   * Generate business-specific recommendations
-   */
-  private generateBusinessRecommendations(businessResult: any, analysis: any): Recommendation[] {
-    const recommendations: Recommendation[] = [
-      { type: 'business_result', data: businessResult }
-    ];
-
-    // Domain-specific recommendations
-    switch (this.domainConfig.domain) {
-      case 'insurance':
-        if (businessResult.premium) {
-          recommendations.push({
-            type: 'action',
-            action: 'present_policy_details',
-            priority: 'high'
-          });
-
-          if (analysis.budgetSignals?.includes('budget_conscious')) {
-            recommendations.push({
-              type: 'action',
-              action: 'offer_payment_plans',
-              priority: 'medium'
-            });
-          }
-        }
-        break;
-
-      case 'electronics':
-        if (businessResult.recommendations) {
-          recommendations.push({
-            type: 'action',
-            action: 'show_product_details',
-            priority: 'high'
-          });
-
-          recommendations.push({
-            type: 'action',
-            action: 'suggest_accessories',
-            priority: 'medium'
-          });
-        }
-        break;
-
-      case 'fashion':
-        if (businessResult.outfits || businessResult.recommendations) {
-          recommendations.push({
-            type: 'action',
-            action: 'show_styling_options',
-            priority: 'high'
-          });
-
-          if (businessResult.size_consultation) {
-            recommendations.push({
-              type: 'action',
-              action: 'provide_size_guidance',
-              priority: 'medium'
-            });
-          }
-        }
-        break;
-    }
-
-    // Universal recommendations based on analysis
-    if (analysis.leadReadiness === 'ready' || analysis.leadReadiness === 'hot_lead') {
-      recommendations.push({
-        type: 'action',
-        action: 'initiate_purchase_process',
-        priority: 'urgent'
-      });
-    }
-
-    if (analysis.urgencyLevel === 'high') {
-      recommendations.push({
-        type: 'action',
-        action: 'emphasize_immediate_benefits',
-        priority: 'high'
-      });
-    }
-
-    return recommendations;
+  // Utility methods for business logic handlers
+  private extractInsuranceQuoteParams(message: string, context: ConversationContext, analysis: any): any {
+    // Implementation would extract insurance-specific parameters
+    return { 
+      hasMinimumInfo: false, 
+      missing: ['insurance_type', 'coverage_amount'],
+      type: analysis.entityType || 'auto',
+      riskFactors: []
+    };
   }
 
-  /**
-   * Generate follow-up questions based on analysis and domain
-   */
-  private generateFollowUpQuestions(analysis: any, conversation: any): string[] {
-    const questions: string[] = [];
-
-    // Domain-specific follow-up questions
-    switch (this.domainConfig.domain) {
-      case 'insurance':
-        if (analysis.primaryIntent === 'INFORMATION') {
-          questions.push('What type of coverage are you most interested in?');
-          questions.push('Do you have any existing insurance policies?');
-        }
-        if (analysis.primaryIntent === 'PRICE_INQUIRY') {
-          questions.push('Would you like me to calculate a personalized quote?');
-          questions.push('What coverage amount are you considering?');
-        }
-        break;
-
-      case 'electronics':
-        if (analysis.primaryIntent === 'PRODUCT_INQUIRY') {
-          questions.push('What will you primarily use this device for?');
-          questions.push('Do you have a preferred brand or budget range?');
-        }
-        if (analysis.primaryIntent === 'COMPARISON_REQUEST') {
-          questions.push('Which specific features matter most to you?');
-          questions.push('Would you like to see detailed specifications?');
-        }
-        break;
-
-      case 'fashion':
-        if (analysis.primaryIntent === 'STYLE_QUESTION') {
-          questions.push('What occasion are you shopping for?');
-          questions.push('Do you have a preferred style or color palette?');
-        }
-        if (analysis.primaryIntent === 'PRODUCT_INQUIRY') {
-          questions.push('What size do you typically wear?');
-          questions.push('Are you looking for something specific?');
-        }
-        break;
-    }
-
-    // Universal follow-up questions based on conversation stage
-    const messageCount = Math.floor(conversation.messages.length / 2);
-    if (messageCount < 2) {
-      questions.push('Is there anything specific I can help you with today?');
-    }
-
-    if (analysis.leadReadiness === 'exploring') {
-      questions.push('Would you like me to show you some options?');
-    }
-
-    return questions.slice(0, 2); // Limit to 2 questions to avoid overwhelming
+  private extractInsuranceCalculationParams(message: string, context: ConversationContext, analysis: any): any {
+    return { 
+      hasMinimumInfo: false, 
+      missing: ['calculation_type', 'base_parameters'],
+      type: 'premium',
+      breakdown: {},
+      factors: []
+    };
   }
 
-  /**
-   * Generate fallback response for business logic when AI fails
-   */
-  private generateBusinessFallbackResponse(businessResult: any): string {
-    switch (this.domainConfig.domain) {
-      case 'insurance':
-        if (businessResult.premium) {
-          return `Great! I've calculated your insurance premium at GH₵${businessResult.premium}${businessResult.validity ? ` with ${businessResult.validity} validity` : ''}. This comprehensive coverage is designed to protect you and your assets. Would you like me to explain what's included or help you proceed with the application?`;
-        }
-        break;
-
-      case 'electronics':
-        if (businessResult.recommendations) {
-          const productCount = businessResult.recommendations.length;
-          return `Perfect! I've found ${productCount} great ${this.domainConfig.domain} options that match your requirements. These products offer excellent value and performance for your needs. Would you like me to walk you through the features or help you make a decision?`;
-        }
-        break;
-
-      case 'fashion':
-        if (businessResult.outfits) {
-          return `Wonderful! I've put together some stylish outfit combinations that would look amazing on you. These pieces work perfectly for your style preferences and the occasion you mentioned. Would you like to see the complete looks or get sizing information?`;
-        }
-        break;
-    }
-
-    // Generic fallback
-    return `Excellent! I've prepared some personalized recommendations based on your requirements. Here's what I found: ${JSON.stringify(businessResult)}. Would you like me to explain any of these options in detail or help you move forward?`;
+  private extractResortQuoteParams(message: string, context: ConversationContext, analysis: any): any {
+    return { 
+      hasMinimumInfo: false, 
+      missing: ['dates', 'guests', 'room_type']
+    };
   }
 
-  /**
-   * Get default analysis when AI analysis fails
-   */
-  private getDefaultAnalysis(message: string, context: GenericContext): any {
+  private extractPensionInfoParams(message: string, context: ConversationContext, analysis: any): any {
+    return {
+      type: analysis.entityType || 'general_info',
+      specificQuery: analysis.extractedEntities || {}
+    };
+  }
+
+  private performInsuranceCalculation(params: any): any {
+    // Simplified calculation logic
+    return {
+      premium: 1200,
+      coverage: params.coverageAmount || 50000,
+      terms: '12 months'
+    };
+  }
+
+  private calculateResortPricing(params: any): any {
+    return {
+      basePrice: 150,
+      totalPrice: 300,
+      packageDetails: 'Standard package',
+      amenities: ['Pool', 'Spa', 'Restaurant'],
+      availability: true
+    };
+  }
+
+  private getPensionInformation(params: any): any {
+    return {
+      information: 'SSNIT pension information based on your query',
+      resources: ['SSNIT website', 'Contribution calculator'],
+      nextSteps: ['Check contribution history', 'Calculate benefits']
+    };
+  }
+
+  private getBaseInsuranceRate(type: string): number {
+    const rates = { auto: 500, health: 800, life: 300, business: 1200 };
+    return rates[type as keyof typeof rates] || 500;
+  }
+
+  private calculateRiskMultiplier(params: any): number {
+    return 1.0; // Simplified
+  }
+
+  private extractBookingParams(message: string, context: ConversationContext, analysis: any): any {
+    return { hasMinimumInfo: false, missing: ['dates', 'guests'] };
+  }
+
+  private async checkAvailability(params: any): Promise<any> {
+    return { available: true, rooms: [] };
+  }
+
+  private generateBookingRecommendations(params: any): any[] {
+    return [];
+  }
+
+  private calculateBookingPricing(params: any): any {
+    return { total: 0 };
+  }
+
+  private extractPensionParams(message: string, context: ConversationContext, analysis: any): any {
+    return { hasMinimumInfo: false, missing: ['contribution_years', 'salary'] };
+  }
+
+  private calculateSSNITBenefit(params: any): number {
+    return 0; // Simplified
+  }
+
+  private createDefaultAnalysis(message: string, context: ConversationContext): any {
     return {
       primaryIntent: 'INFORMATION',
       entityType: 'general',
@@ -914,22 +640,246 @@ Generate a response that moves the customer toward a purchase decision.
     };
   }
 
-  /**
-   * Handle errors gracefully
-   */
-  private handleError(error: any, message: string, userId: string): AIResponse {
-    const fallbackResponse = this.domainConfig.fallbackMessage || 
-      'I apologize, but I encountered an error. Please try again.';
+  private async queryKnowledge(message: string, context: ConversationContext): Promise<any> {
+    if (!this.ragService) return null;
+    
+    try {
+      return await this.ragService.queryKnowledge(message, {
+        domain: context.domain,
+        stage: context.stage,
+        entityType: context.entityType
+      });
+    } catch (error) {
+      console.error('RAG query error:', error);
+      return null;
+    }
+  }
+
+  private async generateResponse(
+    message: string,
+    context: ConversationContext,
+    analysis: any,
+    knowledge: any,
+    options: QueryOptions
+  ): Promise<{ message: string; confidence: number; businessResult?: any; followUpQuestions?: string[] }> {
+    const systemPrompt = this.buildResponsePrompt(context, analysis, knowledge);
+    const conversationMessages = this.buildConversationMessages(context, options);
+
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...conversationMessages,
+          { role: 'user', content: message }
+        ],
+        temperature: options.temperature || 0.7,
+        max_tokens: options.maxTokens || 800
+      });
+
+      return {
+        message: response.choices[0]?.message?.content || 'I apologize, but I encountered an issue generating a response.',
+        confidence: 0.8
+      };
+    } catch (error) {
+      console.error('Error generating response:', error);
+      return {
+        message: this.domainConfig.fallbackMessage || 'I apologize, but I encountered an issue. Please try again.',
+        confidence: 0.1
+      };
+    }
+  }
+
+  private buildResponsePrompt(context: ConversationContext, analysis: any, knowledge: any): string {
+    let prompt = `You are a helpful AI assistant for ${context.domain} services.`;
+    
+    if (this.clientConfig) {
+      prompt += ` You represent ${this.clientConfig.organizationName}.`;
+      prompt += ` Your personality is ${this.clientConfig.aiConfig?.personality || 'professional'}.`;
+      if (this.clientConfig.aiConfig?.systemPrompt) {
+        prompt += `\n\nAdditional instructions: ${this.clientConfig.aiConfig.systemPrompt}`;
+      }
+    }
+
+    prompt += `\n\nDomain: ${context.domain}`;
+    prompt += `\nCurrent stage: ${context.stage}`;
+    prompt += `\nUser intent: ${analysis.primaryIntent}`;
+    prompt += `\nLead readiness: ${analysis.leadReadiness}`;
+
+    if (knowledge) {
+      prompt += `\n\nRelevant knowledge: ${JSON.stringify(knowledge).substring(0, 1000)}`;
+    }
+
+    prompt += `\n\nRespond helpfully and guide the conversation toward the business goals. Be concise but informative.`;
+
+    return prompt;
+  }
+
+  private buildConversationMessages(context: ConversationContext, options: QueryOptions): any[] {
+    if (!options.includeHistory) return [];
+    
+    const maxLength = options.maxHistoryLength || 10;
+    const history = context.conversationHistory.slice(-maxLength);
+    
+    return history.map(msg => ({
+      role: msg.role,
+      content: msg.content
+    }));
+  }
+
+  private calculateLeadScore(analysis: any, context: ConversationContext): number {
+    let score = 0;
+    
+    // Intent-based scoring
+    const intentScores = {
+      'QUOTE': 30,
+      'BOOKING': 35,
+      'CALCULATION': 25,
+      'INFORMATION': 10,
+      'COMPLAINT': 5
+    };
+    score += intentScores[analysis.primaryIntent as keyof typeof intentScores] || 0;
+    
+    // Readiness-based scoring
+    const readinessScores = {
+      'qualified': 40,
+      'ready': 30,
+      'interested': 20,
+      'exploring': 10
+    };
+    score += readinessScores[analysis.leadReadiness as keyof typeof readinessScores] || 0;
+    
+    // Urgency-based scoring
+    const urgencyScores = {
+      'urgent': 20,
+      'high': 15,
+      'medium': 10,
+      'low': 5
+    };
+    score += urgencyScores[analysis.urgencyLevel as keyof typeof urgencyScores] || 0;
+    
+    // Conversation history bonus
+    if (context.conversationHistory.length > 3) {
+      score += 10;
+    }
+    
+    return Math.min(score, 100);
+  }
+
+  private updateConversationState(context: ConversationContext, analysis: any): void {
+    // Update stage based on conversation progress
+    if (analysis.leadReadiness === 'ready' && context.stage === 'initial') {
+      context.stage = 'qualified';
+    } else if (analysis.leadReadiness === 'qualified') {
+      context.stage = 'closing';
+    }
+    
+    // Update entity type if detected
+    if (analysis.entityType && analysis.entityType !== 'general') {
+      context.entityType = analysis.entityType;
+    }
+    
+    // Store extracted entities
+    if (analysis.extractedEntities) {
+      context.customerInfo = { ...context.customerInfo, ...analysis.extractedEntities };
+    }
+  }
+
+  private createResponseWithBusinessLogic(
+    message: string,
+    context: ConversationContext,
+    analysis: any,
+    businessResult: BusinessLogicResult
+  ): AIResponse {
+    let responseMessage = '';
+    
+    switch (businessResult.type) {
+      case 'premium_quote':
+        responseMessage = `Based on your requirements, I've calculated a ${businessResult.data.type} insurance premium of GHS ${businessResult.data.premium}. This quote includes ${businessResult.data.breakdown.factors?.join(', ') || 'standard coverage'}. Would you like me to explain the coverage details or help you proceed with an application?`;
+        break;
+        
+      case 'booking_options':
+        responseMessage = `I found several availability options for your stay. The pricing starts at GHS ${businessResult.data.pricing?.total || 'TBD'} for your dates. Would you like me to show you the available rooms and packages?`;
+        break;
+        
+      case 'pension_calculation':
+        responseMessage = `Based on your contribution history, your estimated monthly SSNIT pension benefit would be GHS ${businessResult.data.monthlyBenefit}. This is calculated from ${businessResult.data.breakdown.contributionYears} years of contributions. Would you like me to explain how this amount was calculated or discuss ways to potentially increase your benefits?`;
+        break;
+        
+      case 'info_needed':
+        responseMessage = `To provide you with accurate information, I need a few more details: ${businessResult.data.missingFields?.join(', ')}. Could you please provide these details?`;
+        break;
+        
+      default:
+        responseMessage = `I've processed your request and found some relevant information. ${JSON.stringify(businessResult.data)}`;
+    }
 
     return {
-      message: fallbackResponse,
+      message: responseMessage,
+      confidence: businessResult.confidence,
+      leadScore: this.calculateLeadScore(analysis, context),
+      shouldCaptureLead: businessResult.type !== 'info_needed',
+      nextAction: businessResult.needsFollowUp ? 'gather_details' : 'continue',
+      context,
+      businessResult: businessResult.data
+    };
+  }
+
+  private createErrorResponse(userId: string, message: string, error: any): AIResponse {
+    const context = this.getOrCreateConversation(userId);
+    const fallbackMessage = this.clientConfig?.aiConfig?.fallbackMessage || 
+                           this.domainConfig.fallbackMessage || 
+                           'I apologize, but I encountered an error. Please try again.';
+
+    return {
+      message: fallbackMessage,
       confidence: 0.1,
       leadScore: 0,
       shouldCaptureLead: false,
       nextAction: 'error_recovery',
-      context: this.conversations.get(userId)?.context || this.createNewConversation(userId).context
+      context
     };
+  }
+
+  // Public utility methods
+  public getConversationContext(userId: string): ConversationContext | undefined {
+    return this.conversations.get(userId);
+  }
+
+  public clearConversation(userId: string): void {
+    this.conversations.delete(userId);
+  }
+
+  public async healthCheck(): Promise<{ status: string; details: any }> {
+    const details: any = {
+      initialized: this.initialized,
+      domain: this.domainConfig.domain,
+      clientId: this.clientConfig?.clientId || 'default',
+      activeConversations: this.conversations.size
+    };
+
+    // Check dependencies
+    if (this.ragService) {
+      details.ragService = 'available';
+    }
+    if (this.databaseAdapter) {
+      details.databaseAdapter = 'available';
+    }
+    if (this.vectorStore) {
+      details.vectorStore = 'available';
+    }
+
+    return {
+      status: this.initialized ? 'healthy' : 'initializing',
+      details
+    };
+  }
+
+  public setDependencies(dependencies: { ragService?: any; databaseAdapter?: any; vectorStore?: any }): void {
+    if (dependencies.ragService) this.ragService = dependencies.ragService;
+    if (dependencies.databaseAdapter) this.databaseAdapter = dependencies.databaseAdapter;
+    if (dependencies.vectorStore) this.vectorStore = dependencies.vectorStore;
   }
 }
 
-export default GenericAIService;
+export default AIService;

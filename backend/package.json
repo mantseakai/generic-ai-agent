@@ -6,7 +6,11 @@
     "start": "node dist/server.js",
     "dev": "nodemon src/server.ts",
     "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "phase2:migrate": "tsx src/scripts/run-phase2-cleanup.ts",
+    "phase2:dry-run": "tsx src/scripts/run-phase2-cleanup.ts --dry-run",
+    "phase2:validate": "tsx src/scripts/run-phase2-cleanup.ts --validate-only",
+    "phase2:force": "tsx src/scripts/run-phase2-cleanup.ts --force"
   },
   "keywords": [],
   "author": "",
@@ -44,6 +48,7 @@
     "@types/node": "^24.2.1",
     "nodemon": "^3.1.10",
     "ts-node": "^10.9.2",
+    "tsx": "^4.20.4",
     "typescript": "^5.9.2"
   }
 }

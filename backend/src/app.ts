@@ -1,3 +1,4 @@
+import { AIService } from './services/AIService';
 // Final Corrected App.ts - With Backward Compatibility
 // File: backend/src/app.ts
 
