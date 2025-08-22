@@ -1,25 +1,20 @@
-// ENHANCED api.ts - Includes all your existing functionality + Generic Agent Support
-// Replace your current frontend/src/services/api.ts with this version
+// File: frontend/src/services/api.ts - UPDATED WITH MULTI-CLIENT SUPPORT
 
-import axios, { AxiosResponse } from 'axios';
+import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
-
+// Configure base axios instance
 const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 60000, // Your existing 60s timeout
+  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:3000/api',
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Enhanced Request interceptor (your existing enhanced logging)
+// Request interceptor for logging
 api.interceptors.request.use(
   (config) => {
-    console.log(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`, {
-      timestamp: new Date().toISOString(),
-      timeout: config.timeout
-    });
+    console.log(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`);
     return config;
   },
   (error) => {
@@ -28,291 +23,19 @@ api.interceptors.request.use(
   }
 );
 
-// Enhanced Response interceptor (your existing enhanced error handling)
+// Response interceptor for logging and error handling
 api.interceptors.response.use(
-  (response: AxiosResponse) => {
-    console.log(`✅ API Response: ${response.status} ${response.config.url}`, {
-      timestamp: new Date().toISOString(),
-      duration: response.headers['x-response-time'] || 'unknown'
-    });
+  (response) => {
+    console.log(`✅ API Response: ${response.status} ${response.config.url}`);
     return response;
   },
   (error) => {
-    const timestamp = new Date().toISOString();
-    
-    // Your existing enhanced error logging
-    if (error.code === 'ECONNABORTED') {
-      console.error(`⏰ API Timeout Error (${timestamp}):`, {
-        url: error.config?.url,
-        timeout: error.config?.timeout,
-        message: 'Request exceeded timeout limit'
-      });
-    } else if (error.response) {
-      console.error(`🔥 API Response Error (${timestamp}):`, {
-        status: error.response.status,
-        url: error.config?.url,
-        data: error.response.data,
-        statusText: error.response.statusText
-      });
-    } else if (error.request) {
-      console.error(`🌐 API Network Error (${timestamp}):`, {
-        url: error.config?.url,
-        message: 'No response received from server'
-      });
-    } else {
-      console.error(`⚠️ API Setup Error (${timestamp}):`, error.message);
-    }
-    
+    console.error(`❌ API Error: ${error.response?.status} ${error.config?.url}`, error.response?.data);
     return Promise.reject(error);
   }
 );
 
-// Enhanced Chat API with Generic Agent Support
-export const chatAPI = {
-  // EXISTING: Original endpoint with your exact error handling logic
-  sendMessage: async (message: string, userId: string, context: any = {}) => {
-    const startTime = Date.now();
-    console.log(`💬 Sending message to ORIGINAL agent for user ${userId}:`, {
-      messageLength: message.length,
-      timestamp: new Date().toISOString()
-    });
-    
-    try {
-      const response = await api.post('/chat/message', {
-        message,
-        userId,
-        context
-      });
-      
-      const duration = Date.now() - startTime;
-      console.log(`✅ Original agent response received in ${duration}ms`);
-      
-      return response.data;
-    } catch (error: any) {
-      const duration = Date.now() - startTime;
-      console.error(`❌ Original Agent API Error after ${duration}ms:`, error);
-      
-      // Your existing enhanced error handling with specific user messages
-      if (error.code === 'ECONNABORTED') {
-        throw new Error('The AI is taking longer than usual to process your message. Please try again - your message was not lost.');
-      }
-      
-      if (error.response?.status === 408) {
-        throw new Error('Request timed out on the server. The AI might be processing complex analysis. Please try again.');
-      }
-      
-      if (error.response?.status === 429) {
-        throw new Error('Too many requests. Please wait a moment before trying again.');
-      }
-      
-      if (error.response?.status >= 500) {
-        throw new Error('Server error occurred. Our team has been notified. Please try again in a moment.');
-      }
-      
-      if (error.response?.status === 400) {
-        const errorMessage = error.response.data?.error || 'Invalid request format';
-        throw new Error(`Request error: ${errorMessage}`);
-      }
-      
-      if (!error.response && error.request) {
-        throw new Error('Unable to connect to the server. Please check your internet connection and try again.');
-      }
-      
-      // Fallback error message
-      const fallbackMessage = error.response?.data?.error || 
-                             error.response?.data?.message || 
-                             'An unexpected error occurred. Please try again.';
-      throw new Error(fallbackMessage);
-    }
-  },
-
-  // NEW: Generic agent endpoint with same error handling
-  sendMessageGeneric: async (message: string, userId: string, domain: string = 'insurance', context: any = {}) => {
-    const startTime = Date.now();
-    console.log(`💬 Sending message to GENERIC ${domain} agent for user ${userId}:`, {
-      messageLength: message.length,
-      timestamp: new Date().toISOString()
-    });
-    
-    try {
-      const response = await api.post(`/generic/${domain}/message`, {
-        message,
-        userId,
-        context: {
-          ...context,
-          domain // Ensure domain is set
-        }
-      });
-      
-      const duration = Date.now() - startTime;
-      console.log(`✅ Generic ${domain} agent response received in ${duration}ms`);
-      
-      return response.data;
-    } catch (error: any) {
-      const duration = Date.now() - startTime;
-      console.error(`❌ Generic ${domain} Agent API Error after ${duration}ms:`, error);
-      
-      // Same error handling as original agent
-      if (error.code === 'ECONNABORTED') {
-        throw new Error('The AI is taking longer than usual to process your message. Please try again - your message was not lost.');
-      }
-      
-      if (error.response?.status === 408) {
-        throw new Error('Request timed out on the server. The AI might be processing complex analysis. Please try again.');
-      }
-      
-      if (error.response?.status === 429) {
-        throw new Error('Too many requests. Please wait a moment before trying again.');
-      }
-      
-      if (error.response?.status >= 500) {
-        throw new Error('Server error occurred. Our team has been notified. Please try again in a moment.');
-      }
-      
-      if (error.response?.status === 400) {
-        const errorMessage = error.response.data?.error || 'Invalid request format';
-        throw new Error(`Request error: ${errorMessage}`);
-      }
-      
-      if (!error.response && error.request) {
-        throw new Error('Unable to connect to the server. Please check your internet connection and try again.');
-      }
-      
-      // Fallback error message
-      const fallbackMessage = error.response?.data?.error || 
-                             error.response?.data?.message || 
-                             'An unexpected error occurred. Please try again.';
-      throw new Error(fallbackMessage);
-    }
-  },
-
-  // NEW: Agent comparison
-  compareAgents: async (message: string, userId: string, context: any = {}) => {
-    const startTime = Date.now();
-    console.log(`🔄 Comparing agents for message: "${message.substring(0, 50)}..."`);
-    
-    try {
-      const response = await api.post('/generic/insurance/compare', {
-        message,
-        userId: `compare_${Date.now()}`,
-        context
-      });
-      
-      const duration = Date.now() - startTime;
-      console.log(`✅ Agent comparison completed in ${duration}ms`);
-      
-      return response.data;
-    } catch (error: any) {
-      const duration = Date.now() - startTime;
-      console.error(`❌ Agent Comparison Error after ${duration}ms:`, error);
-      
-      // Same error handling pattern
-      if (error.code === 'ECONNABORTED') {
-        throw new Error('Agent comparison is taking longer than usual. Please try again.');
-      }
-      
-      throw new Error(error.response?.data?.error || 'Failed to compare agents');
-    }
-  },
-
-  // NEW: Agent status check
-  getAgentStatus: async () => {
-    try {
-      const response = await api.get('/agents/status');
-      return response.data;
-    } catch (error: any) {
-      console.error('❌ Agent Status Error:', error);
-      throw new Error('Failed to get agent status');
-    }
-  },
-
-  // EXISTING: Chat history (unchanged)
-  getHistory: async (userId: string) => {
-    try {
-      const response = await api.get(`/chat/history/${userId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('❌ Chat History Error:', error);
-      
-      if (error.code === 'ECONNABORTED') {
-        throw new Error('Timeout loading chat history. Please try again.');
-      }
-      
-      throw new Error(error.response?.data?.error || 'Failed to load chat history');
-    }
-  },
-
-  // EXISTING: Health check (unchanged)
-  healthCheck: async () => {
-    try {
-      const response = await api.get('/chat/health');
-      return response.data;
-    } catch (error: any) {
-      console.error('❌ Health Check Error:', error);
-      throw new Error('Service health check failed');
-    }
-  }
-};
-
-// Enhanced Leads API (keeps your existing functionality)
-export const leadsAPI = {
-  createLead: async (leadData: any) => {
-    try {
-      console.log('📋 Creating lead:', { 
-        source: leadData.source, 
-        userId: leadData.userId,
-        agent: leadData.agent || 'unknown', // Track which agent generated the lead
-        timestamp: new Date().toISOString()
-      });
-      
-      const response = await api.post('/leads/capture', leadData);
-      
-      console.log('✅ Lead created successfully:', response.data);
-      return response.data;
-    } catch (error: any) {
-      console.error('❌ Lead Creation Error:', error);
-      
-      if (error.code === 'ECONNABORTED') {
-        throw new Error('Timeout creating lead. Please try again.');
-      }
-      
-      if (error.response?.status === 400) {
-        throw new Error(error.response.data?.error || 'Invalid lead data');
-      }
-      
-      throw new Error(error.response?.data?.error || 'Failed to create lead');
-    }
-  },
-
-  // EXISTING: Get lead (your existing function)
-  getLead: async (leadId: string) => {
-    try {
-      const response = await api.get(`/leads/${leadId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('❌ Get Lead Error:', error);
-      
-      if (error.response?.status === 404) {
-        throw new Error('Lead not found');
-      }
-      
-      throw new Error(error.response?.data?.error || 'Failed to retrieve lead');
-    }
-  }
-};
-
-// EXISTING: Your utility functions (unchanged)
-export const checkAPIHealth = async (): Promise<boolean> => {
-  try {
-    await chatAPI.healthCheck();
-    return true;
-  } catch (error) {
-    console.warn('⚠️ API Health Check Failed:', error);
-    return false;
-  }
-};
-
-// EXISTING: Your retry logic (unchanged - this is important!)
+// Utility function for retry logic
 export const withRetry = async <T>(
   operation: () => Promise<T>, 
   maxRetries: number = 2,
@@ -342,19 +65,467 @@ export const withRetry = async <T>(
   throw lastError;
 };
 
-// NEW: Utility function to use retry logic with agent calls
+// ===== ORIGINAL CHAT API (PRESERVED) =====
+export const chatAPI = {
+  sendMessage: async (message: string, userId: string, context: any = {}) => {
+    const startTime = Date.now();
+    console.log(`💬 Sending message: "${message.substring(0, 50)}..." for user: ${userId}`);
+    
+    try {
+      const response = await api.post('/chat/message', {
+        message,
+        userId,
+        context
+      });
+      
+      const duration = Date.now() - startTime;
+      console.log(`✅ Chat response received in ${duration}ms`);
+      
+      return response.data;
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      console.error(`❌ Chat Error after ${duration}ms:`, error);
+      
+      if (error.code === 'ECONNABORTED') {
+        throw new Error('The AI is taking longer than usual to respond. Please check your internet connection and try again.');
+      }
+      
+      if (error.response?.status >= 500) {
+        throw new Error('The AI service is temporarily unavailable. Please try again in a moment.');
+      }
+      
+      if (error.response?.status === 429) {
+        throw new Error('Too many requests. Please wait a moment before trying again.');
+      }
+      
+      const fallbackMessage = error.response?.data?.error || 
+                             error.response?.data?.message || 
+                             'An unexpected error occurred. Please try again.';
+      throw new Error(fallbackMessage);
+    }
+  },
+
+  getHistory: async (userId: string) => {
+    try {
+      const response = await api.get(`/chat/history/${userId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Chat History Error:', error);
+      
+      if (error.code === 'ECONNABORTED') {
+        throw new Error('Timeout loading chat history. Please try again.');
+      }
+      
+      throw new Error(error.response?.data?.error || 'Failed to load chat history');
+    }
+  },
+
+  healthCheck: async () => {
+    try {
+      const response = await api.get('/chat/health');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Health Check Error:', error);
+      throw new Error('Service health check failed');
+    }
+  },
+
+  sendMessageGeneric: async (message: string, userId: string, domain: string = 'insurance', context: any = {}) => {
+    const startTime = Date.now();
+    console.log(`🔄 Sending generic message: "${message.substring(0, 50)}..." for domain: ${domain}`);
+    
+    try {
+      const response = await api.post('/generic/insurance/message', {
+        message,
+        userId,
+        domain,
+        context
+      });
+      
+      const duration = Date.now() - startTime;
+      console.log(`✅ Generic response received in ${duration}ms`);
+      
+      return response.data;
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      console.error(`❌ Generic Chat Error after ${duration}ms:`, error);
+      
+      if (error.code === 'ECONNABORTED') {
+        throw new Error('Generic AI is taking longer than usual. Please try again.');
+      }
+      
+      const fallbackMessage = error.response?.data?.error || 
+                             error.response?.data?.message || 
+                             'Generic AI service error. Please try again.';
+      throw new Error(fallbackMessage);
+    }
+  },
+
+  compareAgents: async (message: string, userId: string, context: any = {}) => {
+    const startTime = Date.now();
+    console.log(`🔄 Comparing agents for message: "${message.substring(0, 50)}..."`);
+    
+    try {
+      const response = await api.post('/generic/insurance/compare', {
+        message,
+        userId: `compare_${Date.now()}`,
+        context
+      });
+      
+      const duration = Date.now() - startTime;
+      console.log(`✅ Agent comparison completed in ${duration}ms`);
+      
+      return response.data;
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      console.error(`❌ Agent Comparison Error after ${duration}ms:`, error);
+      
+      if (error.code === 'ECONNABORTED') {
+        throw new Error('Agent comparison is taking longer than usual. Please try again.');
+      }
+      
+      throw new Error(error.response?.data?.error || 'Failed to compare agents');
+    }
+  },
+
+  getAgentStatus: async () => {
+    try {
+      const response = await api.get('/agents/status');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Agent Status Error:', error);
+      throw new Error('Failed to get agent status');
+    }
+  }
+};
+
+// ===== NEW: MULTI-CLIENT API =====
+export const multiClientAPI = {
+  // Admin endpoints
+  listClients: async () => {
+    try {
+      console.log('📋 Fetching client list...');
+      const response = await api.get('/admin/clients');
+      console.log(`✅ Found ${response.data.data?.clients?.length || 0} clients`);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ List Clients Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to fetch clients');
+    }
+  },
+
+  createClient: async (clientData: {
+    organizationName: string;
+    domains: string[];
+    contactEmail: string;
+    whatsapp?: { businessPhoneNumber: string };
+    industry?: string;
+  }) => {
+    try {
+      console.log(`🏢 Creating client: ${clientData.organizationName}`);
+      const response = await api.post('/admin/clients', clientData);
+      console.log(`✅ Client created: ${response.data.clientId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Create Client Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to create client');
+    }
+  },
+
+  updateClient: async (clientId: string, updates: any) => {
+    try {
+      console.log(`🔄 Updating client: ${clientId}`);
+      const response = await api.put(`/admin/clients/${clientId}`, updates);
+      console.log(`✅ Client updated: ${clientId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Update Client Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to update client');
+    }
+  },
+
+  deleteClient: async (clientId: string) => {
+    try {
+      console.log(`🗑️ Deleting client: ${clientId}`);
+      const response = await api.delete(`/admin/clients/${clientId}`);
+      console.log(`✅ Client deleted: ${clientId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Delete Client Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to delete client');
+    }
+  },
+
+  getClient: async (clientId: string) => {
+    try {
+      console.log(`📖 Fetching client details: ${clientId}`);
+      const response = await api.get(`/admin/clients/${clientId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Get Client Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to fetch client details');
+    }
+  },
+
+  // Client chat endpoints
+  sendMessage: async (clientId: string, domain: string, message: string, userId: string, context: any = {}) => {
+    const startTime = Date.now();
+    console.log(`💬 Multi-client message: ${clientId}/${domain} - "${message.substring(0, 50)}..."`);
+    
+    try {
+      const response = await api.post(`/clients/${clientId}/chat/${domain}/message`, {
+        message,
+        userId,
+        context: {
+          ...context,
+          source: 'multi_client_frontend'
+        }
+      });
+      
+      const duration = Date.now() - startTime;
+      console.log(`✅ Multi-client response received in ${duration}ms`);
+      
+      return response.data;
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      console.error(`❌ Multi-client Chat Error after ${duration}ms:`, error);
+      
+      if (error.response?.status === 404) {
+        throw new Error(`Client or domain not found: ${clientId}/${domain}`);
+      }
+      
+      if (error.response?.status === 429) {
+        throw new Error('Daily message limit exceeded for this client');
+      }
+      
+      if (error.code === 'ECONNABORTED') {
+        throw new Error('The AI is taking longer than usual to respond. Please try again.');
+      }
+      
+      const fallbackMessage = error.response?.data?.error || 
+                             error.response?.data?.message || 
+                             'Multi-client AI service error. Please try again.';
+      throw new Error(fallbackMessage);
+    }
+  },
+
+  getChatContext: async (clientId: string, domain: string, userId: string) => {
+    try {
+      console.log(`📝 Fetching chat context: ${clientId}/${domain}/${userId}`);
+      const response = await api.get(`/clients/${clientId}/chat/${domain}/context`, {
+        params: { userId }
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Get Chat Context Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to fetch chat context');
+    }
+  },
+
+  // WhatsApp endpoints
+  getWhatsAppQR: async (clientId: string, type: string = 'general', size: string = '300') => {
+    try {
+      console.log(`📱 Getting WhatsApp QR for client: ${clientId}`);
+      const qrUrl = `/clients/${clientId}/whatsapp/qr-code?type=${type}&size=${size}`;
+      return { qrUrl: api.defaults.baseURL?.replace('/api', '') + '/api' + qrUrl };
+    } catch (error: any) {
+      console.error('❌ WhatsApp QR Error:', error);
+      throw new Error('Failed to generate WhatsApp QR code');
+    }
+  },
+
+  getWhatsAppQRHTML: async (clientId: string, type: string = 'general', size: string = '300') => {
+    try {
+      console.log(`📱 Getting WhatsApp QR HTML for client: ${clientId}`);
+      const htmlUrl = `/clients/${clientId}/whatsapp/qr-code/html?type=${type}&size=${size}`;
+      return { htmlUrl: api.defaults.baseURL?.replace('/api', '') + '/api' + htmlUrl };
+    } catch (error: any) {
+      console.error('❌ WhatsApp QR HTML Error:', error);
+      throw new Error('Failed to generate WhatsApp QR HTML');
+    }
+  },
+
+  getWhatsAppStats: async (clientId: string) => {
+    try {
+      console.log(`📊 Getting WhatsApp stats for client: ${clientId}`);
+      const response = await api.get(`/clients/${clientId}/whatsapp/stats`);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ WhatsApp Stats Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to fetch WhatsApp statistics');
+    }
+  },
+
+  // Analytics endpoints
+  getAnalytics: async (clientId: string) => {
+    try {
+      console.log(`📈 Fetching analytics for client: ${clientId}`);
+      const response = await api.get(`/clients/${clientId}/analytics/dashboard`);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Analytics Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to fetch analytics');
+    }
+  },
+
+  getUsageMetrics: async (clientId: string, timeframe: string = '7d') => {
+    try {
+      console.log(`📊 Fetching usage metrics for client: ${clientId} (${timeframe})`);
+      const response = await api.get(`/clients/${clientId}/analytics/usage`, {
+        params: { timeframe }
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Usage Metrics Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to fetch usage metrics');
+    }
+  }
+};
+
+// ===== SYSTEM API =====
+export const systemAPI = {
+  getHealth: async () => {
+    try {
+      console.log('🏥 Checking system health...');
+      const response = await api.get('/system/health');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ System Health Error:', error);
+      throw new Error('Failed to check system health');
+    }
+  },
+
+  getAgentStatus: async () => {
+    try {
+      console.log('🤖 Getting agent status...');
+      const response = await api.get('/agents/status');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Agent Status Error:', error);
+      throw new Error('Failed to get agent status');
+    }
+  },
+
+  getSystemStatus: async () => {
+    try {
+      console.log('🔍 Getting system status...');
+      // Try the health endpoint first
+      const healthResponse = await fetch(api.defaults.baseURL?.replace('/api', '') + '/health');
+      if (!healthResponse.ok) throw new Error('Health check failed');
+      return await healthResponse.json();
+    } catch (error: any) {
+      console.error('❌ System Status Error:', error);
+      throw new Error('Failed to get system status');
+    }
+  }
+};
+
+// ===== LEGACY LEADS API (PRESERVED) =====
+export const leadsAPI = {
+  createLead: async (leadData: any) => {
+    try {
+      console.log('📝 Creating lead...');
+      const response = await api.post('/leads', leadData);
+      console.log('✅ Lead created successfully');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Create Lead Error:', error);
+      throw new Error(error.response?.data?.error || 'Failed to create lead');
+    }
+  },
+
+  getLeads: async () => {
+    try {
+      const response = await api.get('/leads');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Get Leads Error:', error);
+      throw new Error('Failed to fetch leads');
+    }
+  },
+
+  updateLead: async (leadId: string, updates: any) => {
+    try {
+      const response = await api.put(`/leads/${leadId}`, updates);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Update Lead Error:', error);
+      throw new Error('Failed to update lead');
+    }
+  }
+};
+
+// ===== UTILITY FUNCTIONS =====
+
+// Retry wrapper for any API call
 export const sendMessageWithRetry = async (
   message: string, 
   userId: string, 
-  agent: 'original' | 'generic' = 'original',
+  agent: 'original' | 'generic' | 'multiClient' = 'original',
+  clientId?: string,
   domain: string = 'insurance',
   context: any = {}
 ) => {
   return withRetry(async () => {
-    return agent === 'generic' 
-      ? await chatAPI.sendMessageGeneric(message, userId, domain, context)
-      : await chatAPI.sendMessage(message, userId, context);
+    switch (agent) {
+      case 'generic':
+        return await chatAPI.sendMessageGeneric(message, userId, domain, context);
+      case 'multiClient':
+        if (!clientId) throw new Error('Client ID required for multi-client messages');
+        return await multiClientAPI.sendMessage(clientId, domain, message, userId, context);
+      default:
+        return await chatAPI.sendMessage(message, userId, context);
+    }
   });
 };
 
+// Test all API endpoints
+export const testAllEndpoints = async () => {
+  const results = {
+    originalChat: { status: 'unknown', error: null },
+    genericChat: { status: 'unknown', error: null },
+    multiClient: { status: 'unknown', error: null },
+    systemHealth: { status: 'unknown', error: null }
+  };
+
+  // Test original chat
+  try {
+    await chatAPI.healthCheck();
+    results.originalChat.status = 'healthy';
+  } catch (error: any) {
+    results.originalChat.status = 'error';
+    results.originalChat.error = error.message;
+  }
+
+  // Test generic chat
+  try {
+    await chatAPI.sendMessageGeneric('test', 'test_user', 'insurance', {});
+    results.genericChat.status = 'healthy';
+  } catch (error: any) {
+    results.genericChat.status = 'error';
+    results.genericChat.error = error.message;
+  }
+
+  // Test multi-client system
+  try {
+    await multiClientAPI.listClients();
+    results.multiClient.status = 'healthy';
+  } catch (error: any) {
+    results.multiClient.status = 'error';
+    results.multiClient.error = error.message;
+  }
+
+  // Test system health
+  try {
+    await systemAPI.getSystemStatus();
+    results.systemHealth.status = 'healthy';
+  } catch (error: any) {
+    results.systemHealth.status = 'error';
+    results.systemHealth.error = error.message;
+  }
+
+  return results;
+};
+
+// Export default api instance and all service modules
 export default api;

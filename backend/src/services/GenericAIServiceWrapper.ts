@@ -111,16 +111,16 @@ export class GenericAIServiceWrapper {
    * Enhanced analysis using domain-specific instructions
    */
   private async analyzeUserInputWithDomain(message: string, userId?: string): Promise<AIAnalysis> {
-    const conversationHistory = userId ? this.getConversationHistory(userId) : [];
-    const messageCount = Math.floor(conversationHistory.length / 2);
-    
-    const recentMessages = conversationHistory
-      .slice(-4)
-      .map(msg => `${msg.role}: ${msg.content.substring(0, 150)}...`)
-      .join('\n');
+  const conversationHistory = userId ? this.getConversationHistory(userId) : [];
+  const messageCount = Math.floor(conversationHistory.length / 2);
+  
+  const recentMessages = conversationHistory
+    .slice(-4)
+    .map(msg => `${msg.role}: ${msg.content.substring(0, 150)}...`)
+    .join('\n');
 
-    // Use domain-specific analysis instructions
-    const prompt = `
+  // Use domain-specific analysis instructions
+  const prompt = `
 ${this.domainConfig.analysisInstructions}
 
 CURRENT MESSAGE: "${message}"
@@ -134,32 +134,152 @@ CONVERSATION CONTEXT:
 ` : 'First interaction with customer.'}
 
 ${conversationHistory.length > 0 ? 'IMPORTANT: Consider how this message builds on or differs from previous exchanges.' : ''}
-`;
 
+RESPOND WITH VALID JSON ONLY:
+{
+  "primaryIntent": "string (information_seeking, quote_request, comparison, complaint, booking, etc.)",
+  "insuranceType": "string (auto, health, life, business, travel, property, or null)",
+  "urgencyLevel": "string (high, medium, low)",
+  "budgetSignals": ["array of budget indicators found"],
+  "personalityIndicators": ["array of personality traits"],
+  "objectionType": "string or null",
+  "buyingSignals": ["array of buying intent signals"],
+  "emotionalState": "string (excited, concerned, frustrated, curious, etc.)",
+  "informationNeeds": ["array of specific info they need"],
+  "nextBestAction": "string (provide_info, calculate_quote, schedule_call, etc.)",
+  "confidence": 0.85,
+  "leadReadiness": "string (hot, warm, cold)",
+  "conversationStage": "string (awareness, consideration, decision)",
+  "leadQualificationNotes": "string with key insights"
+}`;
+
+  try {
+    const response = await this.openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: 'You are an expert at analyzing customer messages. Respond ONLY with valid JSON as specified.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.3,
+      max_tokens: 500
+    });
+
+    const content = response.choices[0]?.message?.content?.trim() || '{}';
+    console.log('🔍 Raw AI Analysis Response:', content.substring(0, 200) + '...');
+
+    // Enhanced JSON parsing with better error handling
+    let parsedAnalysis: AIAnalysis;
+    
     try {
-      const response = await this.openai.chat.completions.create({
-        model: process.env.MODEL_NAME || 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: `You are an expert at analyzing customer conversations for ${this.domainConfig.domain} sales.`
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 1000
-      });
-
-      const analysisText = response.choices[0].message.content;
-      return JSON.parse(analysisText || '{}');
-    } catch (error) {
-      console.error('Failed to analyze user input:', error);
-      return this.getDefaultAnalysis();
+      // Try to clean the response first
+      let cleanedContent = content;
+      
+      // Remove any markdown code blocks
+      cleanedContent = cleanedContent.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+      
+      // Remove any leading/trailing whitespace
+      cleanedContent = cleanedContent.trim();
+      
+      // If response doesn't start with {, try to find the JSON part
+      if (!cleanedContent.startsWith('{')) {
+        const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          cleanedContent = jsonMatch[0];
+        } else {
+          throw new Error('No valid JSON found in response');
+        }
+      }
+      
+      parsedAnalysis = JSON.parse(cleanedContent);
+      console.log('✅ Successfully parsed AI analysis');
+      
+    } catch (parseError) {
+      console.error('❌ Failed to parse AI analysis JSON:', parseError);
+      console.error('Raw content that failed to parse:', content);
+      
+      // Return a safe fallback analysis
+      parsedAnalysis = this.createFallbackAnalysis(message);
     }
+
+    // Validate and sanitize the parsed analysis
+    return this.validateAndSanitizeAnalysis(parsedAnalysis, message);
+
+  } catch (error) {
+    console.error('❌ Error in analyzeUserInputWithDomain:', error);
+    return this.createFallbackAnalysis(message);
   }
+}
+
+/**
+ * Create a fallback analysis when AI parsing fails
+ */
+private createFallbackAnalysis(message: string): AIAnalysis {
+  const lowerMessage = message.toLowerCase();
+  
+  // Simple keyword-based analysis as fallback
+  let insuranceType: string | undefined = undefined;
+  if (lowerMessage.includes('car') || lowerMessage.includes('auto')) insuranceType = 'auto';
+  else if (lowerMessage.includes('health') || lowerMessage.includes('medical')) insuranceType = 'health';
+  else if (lowerMessage.includes('life')) insuranceType = 'life';
+  else if (lowerMessage.includes('business')) insuranceType = 'business';
+  
+  let urgencyLevel: 'high' | 'medium' | 'low' = 'medium';
+  if (lowerMessage.includes('urgent') || lowerMessage.includes('asap') || lowerMessage.includes('immediately')) {
+    urgencyLevel = 'high';
+  } else if (lowerMessage.includes('sometime') || lowerMessage.includes('eventually')) {
+    urgencyLevel = 'low';
+  }
+  
+  const primaryIntent = lowerMessage.includes('quote') || lowerMessage.includes('price') || lowerMessage.includes('cost') 
+    ? 'quote_request' 
+    : 'information_seeking';
+
+  console.log('🛡️ Using fallback analysis for message:', message.substring(0, 50) + '...');
+
+  return {
+    primaryIntent,
+    insuranceType,
+    urgencyLevel,
+    budgetSignals: [],
+    personalityIndicators: [],
+    objectionType: undefined, // Changed from null to undefined
+    buyingSignals: [],
+    emotionalState: 'neutral',
+    informationNeeds: ['general information'],
+    nextBestAction: 'provide_info',
+    confidence: 0.5,
+    leadReadiness: 'warm',
+    conversationStage: 'awareness',
+    leadQualificationNotes: 'Fallback analysis - AI parsing failed',
+    entityType: '' // Added missing property
+  };
+}
+
+/**
+ * Validate and sanitize the analysis to ensure it has all required fields
+ */
+private validateAndSanitizeAnalysis(analysis: any, originalMessage: string): AIAnalysis {
+  const sanitized: AIAnalysis = {
+    primaryIntent: analysis.primaryIntent || 'information_seeking',
+    insuranceType: analysis.insuranceType || undefined, // Changed from null to undefined
+    urgencyLevel: analysis.urgencyLevel || 'medium',
+    budgetSignals: Array.isArray(analysis.budgetSignals) ? analysis.budgetSignals : [],
+    personalityIndicators: Array.isArray(analysis.personalityIndicators) ? analysis.personalityIndicators : [],
+    objectionType: analysis.objectionType || undefined, // Changed from null to undefined
+    buyingSignals: Array.isArray(analysis.buyingSignals) ? analysis.buyingSignals : [],
+    emotionalState: analysis.emotionalState || 'neutral',
+    informationNeeds: Array.isArray(analysis.informationNeeds) ? analysis.informationNeeds : ['general information'],
+    nextBestAction: analysis.nextBestAction || 'provide_info',
+    confidence: typeof analysis.confidence === 'number' ? Math.min(Math.max(analysis.confidence, 0), 1) : 0.7,
+    leadReadiness: analysis.leadReadiness || 'warm',
+    conversationStage: analysis.conversationStage || 'awareness',
+    leadQualificationNotes: analysis.leadQualificationNotes || 'Standard analysis',
+    entityType: analysis.entityType || undefined // Added missing property
+  };
+
+  console.log('✅ Analysis validated and sanitized successfully');
+  return sanitized;
+}
 
   /**
    * Check if message requires business logic (e.g., premium calculation)
